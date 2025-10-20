@@ -1,4 +1,4 @@
-name: Close Grafana IRM object when issue closed
+name: Resolve IRM Alert Group
 
 on:
   issues:
@@ -7,28 +7,32 @@ on:
 jobs:
   close-irm:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Extract IRM ID and close it via API
+      - name: Resolve IRM Alert Group
         env:
           IRM_API_KEY: ${{ secrets.IRM_API_KEY }}
           API_URL: https://oncall-prod-us-east-0.grafana.net/oncall
+          GRAFANA_STACK_URL: https://ep.amer.cloud.demokit.grafana.net
         run: |
           echo "Parsing IRM ID from issue body..."
-          irm_id=$(echo "${{ github.event.issue.body }}" | grep -o '\*\*Alert_Group\*\*: *[^ ]*' | cut -d':' -f2 | xargs)
+          body="${{ github.event.issue.body }}"
+          irm_id=$(echo "$body" | grep -Eo '(\*\*)?(Alert[ _]Group)(\*\*)?: *[A-Za-z0-9]+' | sed -E 's/.*: *//' | xargs)
 
           if [ -z "$irm_id" ]; then
-            echo "No Alert_Group found, skipping."
+            echo "No Alert Group ID found, skipping."
             exit 0
           fi
-            
+
           echo "Extracted IRM ID: '$irm_id'"
 
           echo "Closing IRM object in Grafana IRM..."
           curl -v -X POST "$API_URL/api/v1/alert_groups/$irm_id/resolve" \
-          -H "Authorization: Bearer $IRM_API_KEY" \
-          -H "Content-Type: application/json" \
-          -w "\n\nHTTP Status: %{http_code}\n" \
-          -o response.txt
+            --header "Authorization: Bearer $IRM_API_KEY" \
+            --header "X-Grafana-URL: $GRAFANA_STACK_URL" \
+            --header "Content-Type: application/json" \
+            -w "\n\nHTTP Status: %{http_code}\n" \
+            -o response.txt
 
           echo "Response body:"
           cat response.txt
