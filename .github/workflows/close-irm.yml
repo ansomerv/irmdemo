@@ -13,7 +13,7 @@ jobs:
         env:
           IRM_API_KEY: ${{ secrets.IRM_API_KEY }}
           API_URL: https://oncall-prod-us-east-0.grafana.net/oncall
-          GRAFANA_STACK_URL: https://ep.amer.cloud.demokit.grafana.net
+          GRAFANA_STACK_URL: https://demokitcloudamerep.grafana.net
         run: |
           echo "Parsing IRM ID from issue body..."
           body="${{ github.event.issue.body }}"
@@ -28,7 +28,7 @@ jobs:
 
           echo "Closing IRM object in Grafana IRM..."
           curl -v -X POST "$API_URL/api/v1/alert_groups/$irm_id/resolve" \
-            --header "Authorization: Bearer $IRM_API_KEY" \
+            --header "Authorization: $IRM_API_KEY" \
             --header "X-Grafana-URL: $GRAFANA_STACK_URL" \
             --header "Content-Type: application/json" \
             -w "\n\nHTTP Status: %{http_code}\n" \
