@@ -1,0 +1,27 @@
+name: Close Grafana IRM object when issue closed
+
+on:
+  issues:
+    types: [closed]
+
+jobs:
+  close-irm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract IRM ID and close it via API
+        env:
+          IRM_API_KEY: ${{ secrets.IRM_API_KEY }}
+          API_URL: https://oncall-prod-us-east-0.grafana.net/oncall
+        run: |
+          echo "Parsing IRM ID from issue body..."
+          irm_id=$(echo "${{ github.event.issue.body }}" | grep -o 'Alert_Group: *[^ ]*' | cut -d':' -f2 | xargs)
+
+          if [ -z "$irm_id" ]; then
+            echo "No Alert_Group found, skipping."
+            exit 0
+          fi
+
+          echo "Closing IRM object: $Alert_Group"
+          curl -X POST "$API_URL/api/v1/$Alert_Group/api/resolve" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            -H "Content-Type: application/json"
