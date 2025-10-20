@@ -24,7 +24,7 @@ jobs:
           echo "Extracted IRM ID: '$irm_id'"
 
           echo "Closing IRM object in Grafana IRM..."
-          curl -v -X POST "$API_URL/api/v1/alert_group/$irm_id/api/resolve" \
+          curl -v -X POST "$API_URL/api/v1/alert_group/$irm_id/resolve" \
           -H "Authorization: Bearer $IRM_API_KEY" \
           -H "Content-Type: application/json" \
           -w "\n\nHTTP Status: %{http_code}\n" \
