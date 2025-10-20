@@ -20,8 +20,15 @@ jobs:
             echo "No Alert_Group found, skipping."
             exit 0
           fi
+            
+          echo "Extracted IRM ID: '$irm_id'"
 
-          echo "Closing IRM object: $Alert_Group"
-          curl -X POST "$API_URL/api/v1/$Alert_Group/api/resolve" \
-            -H "Authorization: Bearer $IRM_API_KEY" \
-            -H "Content-Type: application/json"
+          echo "Closing IRM object in Grafana IRM..."
+          curl -v -X POST "$API_URL/api/v1/alert_group/$irm_id/api/resolve" \
+          -H "Authorization: Bearer $IRM_API_KEY" \
+          -H "Content-Type: application/json" \
+          -w "\n\nHTTP Status: %{http_code}\n" \
+          -o response.txt
+
+          echo "Response body:"
+          cat response.txt
