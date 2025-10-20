@@ -14,7 +14,7 @@ jobs:
           API_URL: https://oncall-prod-us-east-0.grafana.net/oncall
         run: |
           echo "Parsing IRM ID from issue body..."
-          irm_id=$(echo "${{ github.event.issue.body }}" | grep -o 'Alert_Group: *[^ ]*' | cut -d':' -f2 | xargs)
+          irm_id=$(echo "${{ github.event.issue.body }}" | grep -o '\*\*Alert_Group\*\*: *[^ ]*' | cut -d':' -f2 | xargs)
 
           if [ -z "$irm_id" ]; then
             echo "No Alert_Group found, skipping."
