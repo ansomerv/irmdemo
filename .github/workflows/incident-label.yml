@@ -57,7 +57,6 @@ jobs:
             -H "Content-Type: application/json" \
             "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
             -d '{}')
-
           if [ "$STATUS_CODE" != "200" ]; then
             echo "[ERROR] Failed to fetch fields list. HTTP $STATUS_CODE"
             cat fields.json
@@ -72,7 +71,6 @@ jobs:
             echo "[STEP] Creating label field '$key'..."
             slug=$(echo "$key" | tr '[:upper:] ' '[:lower:]_')
             selectoptions=$(jq -n --arg value "$label" --arg label "$label" '[{ value: $value, label: $label }]')
-
             payload=$(jq -n \
               --arg name "$key" \
               --arg slug "$slug" \
@@ -96,7 +94,6 @@ jobs:
               -H "Content-Type: application/json" \
               "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddField" \
               -d "$payload")
-
             if [ "$STATUS_CODE" = "200" ]; then
               echo "[OUTPUT] Successfully created field '$key'"
             else
@@ -105,7 +102,6 @@ jobs:
               exit 42
             fi
 
-            # Refresh fields list
             curl -s -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
               -H "Content-Type: application/json" \
@@ -115,26 +111,24 @@ jobs:
             existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           fi
 
-          # 3️⃣ Check for existing select option
+          # 3️⃣ Check if select option already exists
           existing_option=$(jq -r --arg name "$key" --arg value "$label" \
             '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json | head -n1 | xargs)
-
           if [ -z "$existing_option" ] || [ "$existing_option" == "null" ]; then
             echo "[STEP] Adding select option '$label' to field '$key'..."
-
             field_version=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .version' fields.json | head -n1 | xargs)
             if [ -z "$field_version" ] || [ "$field_version" == "null" ]; then
               field_version=1
             fi
             echo "[STEP] Current field version = $field_version"
+
+            # --- Hardened block: merge and normalize all selectoptions arrays ---
             echo "[DEBUG] Raw selectoptions output from IRM:"
-            jq -r --arg name "$key" '.fields[] | select(.name==$name) | .selectoptions' fields.json || echo "(jq failed)"
+            jq -r --arg name "$key" '.fields[] | select(.name==$name) | .selectoptions // []' fields.json || echo "(jq failed)"
 
-            # --- Hardened block: ensure valid JSON for selectoptions ---
-            existing_options=$(jq -r --arg name "$key" \
-              '.fields[] | select(.name==$name) | .selectoptions // []' fields.json | tr -d '\r')
+            # Merge multiple arrays safely
+            existing_options=$(jq -s --arg key "$key" '[ .[] | .fields[]? | select(.name==$key) | .selectoptions? ] | add // []' fields.json)
 
-            # Handle empty, null, or malformed JSON
             if [ -z "$existing_options" ] || [ "$existing_options" = "null" ]; then
               echo "[WARN] existing_options empty or null, resetting to []"
               existing_options="[]"
@@ -142,7 +136,10 @@ jobs:
               echo "[WARN] existing_options invalid JSON, resetting to []"
               existing_options="[]"
             fi
-            # -----------------------------------------------------------
+
+            echo "[DEBUG] Normalized selectoptions JSON:"
+            echo "$existing_options" | jq .
+            # ------------------------------------------------------------------
 
             updated_options=$(echo "$existing_options" | jq --arg value "$label" --arg label "$label" '. + [{ value: $value, label: $label }]')
 
@@ -182,7 +179,7 @@ jobs:
             echo "[OUTPUT] Select option '$label' already exists for '$key'"
           fi
 
-          # 4️⃣ Add label to incident
+          # 4️⃣ Add label to the incident
           echo "[STEP] Adding label '$label' to incident $irm_incident_id..."
           payload=$(jq -n \
             --arg incidentID "$irm_incident_id" \
