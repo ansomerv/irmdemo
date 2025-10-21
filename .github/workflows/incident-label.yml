@@ -49,7 +49,7 @@ jobs:
             -H "Accept: application/json" \
             -H "x-grafana-org-id: 1" \
             -d "{
-              \"fieldUUID\": \"b8d0d800-e1e0-450f-8ddd-05171ccdefee\",
+              \"fieldUUID\": \"597027dc-7375-488d-9a39-520280710fde\",
               \"fieldSelectOption\": {
                 \"uuid\": \"$uuid\",
                 \"value\": \"${{ env.LABEL_NAME }}\",
@@ -71,7 +71,7 @@ jobs:
               \"label\": {
                 \"colorHex\": \"#ff0000\",
                 \"description\": \"Customers are affected by this incident.\",
-                \"key\": \"newx\",
+                \"key\": \"ghLabel\",
                 \"label\": \"${{ env.LABEL_NAME }}\"
               }
             }" \
