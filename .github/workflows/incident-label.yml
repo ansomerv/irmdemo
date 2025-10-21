@@ -7,6 +7,9 @@ on:
 jobs:
   sync-label:
     runs-on: ubuntu-latest
+    env:
+      IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
+      STACK_URL: https://ep.amer.cloud.demokit.grafana.com
 
     steps:
       - name: Extract IRM Incident ID
@@ -14,183 +17,96 @@ jobs:
         run: |
           body="${{ github.event.issue.body }}"
           irm_incident_id=$(echo "$body" | tr -d '\r' | grep -Eio 'incident[ _]?id[^0-9]*[0-9]+' | grep -Eo '[0-9]+' | head -n1)
-
           if [ -z "$irm_incident_id" ]; then
             echo "No IRM Incident ID found, skipping sync."
             exit 0
           fi
-
           echo "IRM Incident ID: $irm_incident_id"
           echo "irm_incident_id=$irm_incident_id" >> $GITHUB_OUTPUT
 
-      - name: Sync GitHub Label → Grafana IRM
-        if: ${{ steps.extract.outputs.irm_incident_id != '' }}
-        env:
-          IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
-          STACK_URL: https://ep.amer.cloud.demokit.grafana.com
+      - name: Parse Label Key/Value
+        id: parse
         run: |
-          set -euo pipefail
-
-          label_raw="${{ github.event.label.name }}"
-          label_color="${{ github.event.label.color }}"
-          label_description="${{ github.event.label.description || '' }}"
-          irm_incident_id="${{ steps.extract.outputs.irm_incident_id }}"
-
-          if [[ "$label_raw" == *:* ]]; then
-            key="${label_raw%%:*}"
-            value="${label_raw#*:}"
+          label="${{ github.event.label.name }}"
+          if [[ "$label" == *:* ]]; then
+            key="${label%%:*}"
+            value="${label#*:}"
           else
             key="githubLabel"
-            value="$label_raw"
+            value="$label"
           fi
+          echo "Key: $key"
+          echo "Value: $value"
+          echo "key=$key" >> $GITHUB_OUTPUT
+          echo "value=$value" >> $GITHUB_OUTPUT
 
-          echo "[STEP] Parsed label -> key='$key', value='$value'"
-
-          # 1️⃣ Get all fields
-          STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
-            -X POST \
+      - name: Get existing IRM fields
+        id: getfields
+        run: |
+          curl -s -X POST \
             -H "Authorization: Bearer $IRM_API_KEY" \
             -H "Content-Type: application/json" \
             "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
-            -d '{}')
+            -o fields.json
 
-          if [ "$STATUS_CODE" != "200" ]; then
-            echo "[ERROR] Failed to fetch fields list. HTTP $STATUS_CODE"
-            cat fields.json
-            exit 42
-          fi
+          echo "Fetched existing IRM fields:"
+          jq '.fields | length' fields.json || echo "No fields returned."
 
-          # 2️⃣ Locate githubLabel field UUID
-          field_uuid=$(jq -r --arg name "githubLabel" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1)
-          if [ -z "$field_uuid" ] || [ "$field_uuid" = "null" ]; then
-            echo "[STEP] 'githubLabel' field not found. Creating it..."
-            slug="githublabel"
-            selectoptions=$(jq -n '[{ value: $ARGS.named.val, label: $ARGS.named.val }]' --arg val "$value")
+      - name: Create or update IRM field + option, then add label
+        run: |
+          key="${{ steps.parse.outputs.key }}"
+          value="${{ steps.parse.outputs.value }}"
+          irm_incident_id="${{ steps.extract.outputs.irm_incident_id }}"
 
-            payload=$(jq -n \
-              --arg name "githubLabel" \
-              --arg slug "$slug" \
-              --argjson selectoptions "$selectoptions" \
-              '{
-                field: {
-                  name: $name,
-                  slug: $slug,
-                  type: "single-select",
-                  domainName: "labels",
-                  source: "incident",
-                  archived: false,
-                  version: 1,
-                  selectoptions: $selectoptions
-                }
-              }')
-
-            STATUS_CODE=$(curl -s -o add_field.json -w "%{response_code}" \
-              -X POST \
+          # Check if field exists
+          field_uuid=$(jq -r --arg key "$key" '.fields[] | select(.name==$key and .domainName=="labels") | .uuid' fields.json)
+          if [ -z "$field_uuid" ] || [ "$field_uuid" == "null" ]; then
+            echo "Creating new label field '$key' in IRM"
+            curl -s -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
               -H "Content-Type: application/json" \
-              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddField" \
-              -d "$payload")
+              -d "{\"field\":{\"name\":\"$key\",\"slug\":\"$key\",\"type\":\"single-select\",\"domainName\":\"labels\",\"source\":\"incident\",\"archived\":false,\"version\":1,\"selectoptions\":[]}}" \
+              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddField" > /dev/null
 
-            if [ "$STATUS_CODE" != "200" ]; then
-              echo "[ERROR] Failed to create 'githubLabel' field. HTTP $STATUS_CODE"
-              cat add_field.json
-              exit 42
-            fi
-
-            field_uuid=$(jq -r '.field.uuid // empty' add_field.json)
-            echo "[OUTPUT] Created new githubLabel field (uuid=$field_uuid)"
-          else
-            echo "[OUTPUT] Using existing field UUID: $field_uuid"
-          fi
-
-          # 3️⃣ Check if option already exists
-          value_exists=$(jq -r --arg key "githubLabel" --arg val "$value" \
-            '.fields[] | select(.name==$key) | .selectoptions[]? | select(.value==$val) | .value' fields.json | head -n1)
-
-          if [ -z "$value_exists" ] || [ "$value_exists" = "null" ]; then
-            echo "[STEP] Adding new select option '$value' to githubLabel..."
-            option_uuid=$(uuidgen)
-
-            payload=$(jq -n \
-              --arg fieldUUID "$field_uuid" \
-              --arg option_uuid "$option_uuid" \
-              --arg value "$value" \
-              '{
-                fieldUUID: $fieldUUID,
-                fieldSelectOption: {
-                  uuid: $option_uuid,
-                  value: $value,
-                  label: $value,
-                  description: "",
-                  color: "",
-                  icon: "tag-alt",
-                  source: "incident"
-                }
-              }')
-
-            STATUS_CODE=$(curl -s -o add_option.json -w "%{response_code}" \
-              -X POST \
+            # Refresh field UUID after creation
+            sleep 2
+            field_uuid=$(curl -s -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
               -H "Content-Type: application/json" \
-              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddFieldSelectOption" \
-              -d "$payload")
-
-            if [ "$STATUS_CODE" != "200" ]; then
-              echo "[ERROR] Failed to add select option '$value'. HTTP $STATUS_CODE"
-              cat add_option.json
-              exit 42
-            fi
-            echo "[OUTPUT] Successfully added select option '$value' to githubLabel"
-
-            # 🕐 Wait until new option appears
-            echo "[STEP] Verifying that option '$value' is registered in IRM..."
-            for i in {1..6}; do
-              sleep 2
-              curl -s -X POST \
-                -H "Authorization: Bearer $IRM_API_KEY" \
-                -H "Content-Type: application/json" \
-                "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
-                -d '{}' > verify.json
-              value_exists=$(jq -r --arg key "githubLabel" --arg val "$value" \
-                '.fields[] | select(.name==$key) | .selectoptions[]? | select(.value==$val) | .value' verify.json | head -n1)
-              if [ -n "$value_exists" ] && [ "$value_exists" != "null" ]; then
-                echo "[OUTPUT] Option '$value' now visible in IRM."
-                break
-              fi
-              echo "[WAIT] Option not visible yet, retrying ($i/6)..."
-              if [ "$i" -eq 6 ]; then
-                echo "[ERROR] Option '$value' never became available in IRM. Skipping label add."
-                exit 42
-              fi
-            done
-          else
-            echo "[OUTPUT] Select option '$value' already exists for githubLabel, skipping add."
+              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" | \
+              jq -r --arg key "$key" '.fields[] | select(.name==$key) | .uuid')
           fi
 
-          # 4️⃣ Add label to IRM Incident
-          echo "[STEP] Adding label '$key:$value' to incident $irm_incident_id..."
-          payload=$(jq -n \
-            --arg incidentID "$irm_incident_id" \
-            --arg key "$key" \
-            --arg label "$value" \
-            --arg colorHex "#$label_color" \
-            --arg description "$label_description" \
-            '{
-              incidentID: $incidentID,
-              label: {
-                key: $key,
-                label: $label,
-                colorHex: $colorHex,
-                description: $description
-              }
-            }')
+          if [ -z "$field_uuid" ] || [ "$field_uuid" == "null" ]; then
+            echo "❌ Failed to find or create field UUID for key '$key'"
+            exit 1
+          fi
 
-          STATUS_CODE=$(curl -s -L -o add_label.json -w "%{response_code}" \
-            -X POST \
+          # Check if value already exists
+          option_exists=$(jq -r --arg key "$key" --arg value "$value" '.fields[] | select(.name==$key) | .selectoptions[]? | select(.value==$value)' fields.json)
+          if [ -z "$option_exists" ]; then
+            echo "Adding new select option '$value' to field '$key'"
+            uuid=$(uuidgen)
+            len=${#uuid}
+            if [ "$len" -ne 36 ]; then
+              echo "Generated UUID invalid length ($len)."
+              exit 1
+            fi
+            curl -s -X POST \
+              -H "Authorization: Bearer $IRM_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"fieldUUID\":\"$field_uuid\",\"fieldSelectOption\":{\"uuid\":\"$uuid\",\"value\":\"$value\",\"label\":\"$value\",\"source\":\"incident\",\"color\":\"\",\"icon\":\"tag-alt\"}}" \
+              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddFieldSelectOption" > /dev/null
+          else
+            echo "Select option '$value' already exists under '$key'."
+          fi
+
+          # Add label to incident
+          echo "Applying label '$key=$value' to IRM incident $irm_incident_id"
+          curl -s -X POST \
             -H "Authorization: Bearer $IRM_API_KEY" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel" \
-            -d "$payload")
+            -H "Content-Type: application/json" \
+            -d "{\"incidentID\":\"$irm_incident_id\",\"label\":{\"colorHex\":\"#ff0000\",\"description\":\"Added from GitHub label sync\",\"key\":\"$key\",\"label\":\"$value\"}}" \
+            "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel" > /dev/null
 
-          echo "📬 Response (HTTP $STATUS_CODE):"
-          cat add_label.json | jq .
+          echo "✅ Done syncing label."
