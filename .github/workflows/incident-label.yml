@@ -33,7 +33,7 @@ jobs:
             key="${label%%:*}"
             value="${label#*:}"
           else
-            key="githubLabel"
+            key="ghLabel"
             value="$label"
           fi
           echo "Parsed key=$key, value=$value"
