@@ -22,12 +22,21 @@ jobs:
       - name: Parse incident ID from issue body
         id: parse_incident
         run: |
-          # Expecting the issue body to contain something like: incidentID: 546
-          INCIDENT_ID=$(echo $ISSUE_BODY | jq -r 'scan("incidentID[: ]+([0-9]+)") | .[0]')
+          # Matches formats like:
+          # - incidentID: 546
+          # - Incident ID: 546
+          # - **Incident ID:** 546
+          # - Incident-ID 546
+          INCIDENT_ID=$(echo "$ISSUE_BODY" | grep -Eo '([Ii]ncident[ _-]?[Ii][dD])[: ]*\**[[:space:]]*([0-9]+)' | grep -Eo '[0-9]+' | head -1)
+          
           if [ -z "$INCIDENT_ID" ]; then
             echo "❌ Could not find incidentID in issue body"
+            echo "Issue body was:"
+            echo "$ISSUE_BODY"
             exit 1
           fi
+
+          echo "✅ Found incidentID: $INCIDENT_ID"
           echo "INCIDENT_ID=$INCIDENT_ID" >> $GITHUB_ENV
 
       - name: Generate UUID and add field select option
