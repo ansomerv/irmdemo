@@ -130,7 +130,15 @@ jobs:
             echo "[DEBUG] Raw selectoptions output from IRM:"
             jq -r --arg name "$key" '.fields[] | select(.name==$name) | .selectoptions // []' fields.json || echo "(jq failed)"
 
-            existing_options=$(jq -s --arg key "$key" '[ .[] | .fields[]? | select(.name==$key) | .selectoptions? ] | add // []' fields.json)
+            # Merge multiple arrays safely, dropping invalid UUID entries
+            existing_options=$(jq -s --arg key "$key" '
+              [ .[] 
+                | .fields[]? 
+                | select(.name==$key) 
+                | .selectoptions? 
+                | map(select(.uuid != null and .uuid != "")) 
+              ] 
+              | add // []' fields.json)
 
             if [ -z "$existing_options" ] || [ "$existing_options" = "null" ]; then
               echo "[WARN] existing_options empty or null, resetting to []"
