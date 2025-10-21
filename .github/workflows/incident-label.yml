@@ -96,7 +96,7 @@ jobs:
             echo "Creating select option '$value' for '$key'"
             uuid=$(uuidgen)
           curl -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddFieldSelectOption" \
-          -H "Authorization: Bearer $CONFIG_GRAFANA_service_account_token" \
+          -H "Authorization: Bearer $IRM_API_KEY" \
           -H "Content-Type: application/json" \
           -H "Accept: application/json" \
           -H "x-grafana-org-id: $ORG_ID" \
