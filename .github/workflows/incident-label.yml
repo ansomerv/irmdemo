@@ -13,7 +13,6 @@ jobs:
         id: extract
         run: |
           body="${{ github.event.issue.body }}"
-          # Find the incident ID in the issue body (e.g. "Incident ID: 538" or "IRM Incident: 538")
           irm_incident_id=$(echo "$body" | tr -d '\r' | grep -Eio 'incident[ _]?id[^0-9]*[0-9]+' | grep -Eo '[0-9]+' | head -n1)
 
           if [ -z "$irm_incident_id" ]; then
@@ -27,15 +26,15 @@ jobs:
       - name: Sync label to IRM
         if: ${{ steps.extract.outputs.irm_incident_id != '' }}
         env:
-          IRM_API_KEY: ${{ secrets.IRM_API_KEY }}
-          STACK_URL: https://demokitcloudamerep.grafana.net
+          IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
+          IRM_API_URL: https://ep.amer.cloud.demokit.grafana.com/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel
         run: |
           label_name="${{ github.event.label.name }}"
           label_color="${{ github.event.label.color }}"
           label_description="${{ github.event.label.description || '' }}"
           irm_incident_id="${{ steps.extract.outputs.irm_incident_id }}"
 
-          echo "Adding GitHub label '$label_name' (color: $label_color) to IRM incident $irm_incident_id..."
+          echo "Adding GitHub label '$label_name' (color: #$label_color) to IRM incident $irm_incident_id..."
 
           payload=$(jq -n \
             --arg incidentID "$irm_incident_id" \
@@ -53,9 +52,16 @@ jobs:
               }
             }')
 
-          curl -s -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel" \
+          echo "📦 Request payload:"
+          echo "$payload" | jq .
+
+          echo "🚀 Sending to IRM..."
+          curl -v -L -X POST "$IRM_API_URL" \
             -H "Authorization: Bearer $IRM_API_KEY" \
             -H "Content-Type: application/json; charset=utf-8" \
-            -d "$payload"
+            -d "$payload" \
+            -w "\n\nHTTP Status: %{http_code}\n" \
+            -o response.json
 
-          echo "✅ Label synced to IRM."
+          echo "📬 Response:"
+          cat response.json | jq .
