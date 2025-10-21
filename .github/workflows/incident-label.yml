@@ -47,7 +47,7 @@ jobs:
 
           echo "[STEP] Parsed label -> key='$key', label='$label'"
 
-          # 1️⃣ Fetch all existing fields
+          # 1️⃣ Fetch existing IRM fields
           echo "[STEP] Fetching IRM fields..."
           STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
             -X POST \
@@ -62,13 +62,15 @@ jobs:
             exit 42
           fi
 
-          # 2️⃣ Check if the field exists
+          # 2️⃣ Check if the field already exists
           existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           if [ -n "$existing_uuid" ] && [ "$existing_uuid" != "null" ]; then
-            echo "[OUTPUT] Field '$key' exists (uuid=$existing_uuid)"
+            echo "[OUTPUT] Label field '$key' already exists (uuid=$existing_uuid)"
           else
-            echo "[STEP] Creating new label field '$key' with option '$label'..."
+            echo "[STEP] Creating label field '$key'..."
             slug=$(echo "$key" | tr '[:upper:] ' '[:lower:]_')
+
+            # Build initial selectoptions for this field
             selectoptions=$(jq -n --arg value "$label" --arg label "$label" '[{ value: $value, label: $label }]')
 
             payload=$(jq -n \
@@ -88,7 +90,7 @@ jobs:
                 }
               }')
 
-            STATUS_CODE=$(curl -s -o create_field.json -w "%{response_code}" \
+            STATUS_CODE=$(curl -s -o add_field.json -w "%{response_code}" \
               -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
               -H "Content-Type: application/json" \
@@ -96,31 +98,31 @@ jobs:
               -d "$payload")
 
             if [ "$STATUS_CODE" = "200" ]; then
-              echo "[OUTPUT] Created label field '$key'"
+              echo "[OUTPUT] Successfully created field '$key'"
             else
-              echo "[ERROR] Failed to create label field '$key'. HTTP $STATUS_CODE"
-              cat create_field.json
+              echo "[ERROR] Failed to create field '$key'. HTTP $STATUS_CODE"
+              cat add_field.json
               exit 42
             fi
 
-            # Re-fetch to ensure we have the new field UUID
-            STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
-              -X POST \
+            # Refresh fields.json to capture the new field
+            curl -s -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
               -H "Content-Type: application/json" \
               "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
-              -d '{}')
+              -d '{}' > fields.json
+
             existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           fi
 
-          # 3️⃣ Ensure the select option exists
+          # 3️⃣ Check if the select option exists
           existing_option=$(jq -r --arg name "$key" --arg value "$label" \
             '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json | head -n1 | xargs)
 
           if [ -z "$existing_option" ] || [ "$existing_option" == "null" ]; then
             echo "[STEP] Adding select option '$label' to field '$key'..."
 
-            # Pull current version safely (only first numeric match)
+            # Pull version number from the field object
             field_version=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .version' fields.json | head -n1 | xargs)
             if [ -z "$field_version" ] || [ "$field_version" == "null" ]; then
               field_version=1
@@ -163,7 +165,7 @@ jobs:
             echo "[OUTPUT] Select option '$label' already exists for '$key'"
           fi
 
-          # 4️⃣ Add the label to the incident
+          # 4️⃣ Add label to the incident
           echo "[STEP] Adding label '$label' to incident $irm_incident_id..."
           payload=$(jq -n \
             --arg incidentID "$irm_incident_id" \
