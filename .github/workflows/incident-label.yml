@@ -14,7 +14,7 @@ jobs:
         run: |
           body="${{ github.event.issue.body }}"
           # Find the incident ID in the issue body (e.g. "Incident ID: 538" or "IRM Incident: 538")
-          irm_incident_id=$(echo "$body" | grep -Eo '(IRM[ _]?Incident|Incident ID): *[0-9]+' | sed -E 's/.*: *//' | xargs)
+          irm_incident_id=$(echo "$body" | grep -Eio '(\*\*)?(irm[ _]?incident|incident id)(\*\*)?: *[0-9]+' | sed -E 's/.*: *//' | xargs)
 
           if [ -z "$irm_incident_id" ]; then
             echo "No IRM Incident ID found, skipping sync."
