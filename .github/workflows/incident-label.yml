@@ -65,11 +65,43 @@ jobs:
           existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json)
           if [ -n "$existing_uuid" ] && [ "$existing_uuid" != "null" ]; then
             echo "[OUTPUT] Label field '$key' already exists (uuid=$existing_uuid)"
-          else
-            echo "[STEP] Creating new label field '$key'..."
-            slug=$(echo "$key" | tr '[:upper:] ' '[:lower:]_')
 
-            selectoptions=$(jq -n '[{ value: "auto", label: "auto" }]')
+            # Check if this label value already exists in selectoptions
+            existing_option=$(jq -r --arg name "$key" --arg value "$label" \
+              '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json)
+
+            if [ -z "$existing_option" ] || [ "$existing_option" == "null" ]; then
+              echo "[STEP] Adding new select option '$label' to field '$key'..."
+              payload=$(jq -n \
+                --arg uuid "$existing_uuid" \
+                --arg name "$key" \
+                --arg value "$label" \
+                --arg label "$label" \
+                '{
+                  field: {
+                    uuid: $uuid,
+                    name: $name,
+                    type: "single-select",
+                    domainName: "labels",
+                    source: "incident",
+                    selectoptions: [{ value: $value, label: $label }]
+                  }
+                }')
+
+              STATUS_CODE=$(curl -s -o add_option.json -w "%{response_code}" \
+                -X POST \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $IRM_API_KEY" \
+                "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.UpdateField" \
+                -d "$payload")
+
+              echo "[OUTPUT] Added select option '$label' (HTTP $STATUS_CODE)"
+              cat add_option.json
+            fi
+          else
+            echo "[STEP] Creating new label field '$key' with option '$label'..."
+            slug=$(echo "$key" | tr '[:upper:] ' '[:lower:]_')
+            selectoptions=$(jq -n --arg value "$label" --arg label "$label" '[{ value: $value, label: $label }]')
 
             payload=$(jq -n \
               --arg name "$key" \
@@ -96,7 +128,7 @@ jobs:
               -d "$payload")
 
             if [ "$STATUS_CODE" = "200" ]; then
-              echo "[OUTPUT] Successfully created field '$key'"
+              echo "[OUTPUT] Successfully created field '$key' with option '$label'"
             else
               echo "[ERROR] Failed to create field '$key'. Status: $STATUS_CODE"
               cat create_field.json
