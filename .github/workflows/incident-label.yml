@@ -47,7 +47,7 @@ jobs:
 
           echo "[STEP] Parsed label -> key='$key', label='$label'"
 
-          # 1️⃣ Get all fields
+          # 1️⃣ Fetch all existing fields
           echo "[STEP] Fetching IRM fields..."
           STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
             -X POST \
@@ -57,12 +57,12 @@ jobs:
             -d '{}')
 
           if [ "$STATUS_CODE" != "200" ]; then
-            echo "[ERROR] Failed to fetch fields. HTTP $STATUS_CODE"
+            echo "[ERROR] Failed to fetch fields list. HTTP $STATUS_CODE"
             cat fields.json
             exit 42
           fi
 
-          # 2️⃣ Check if field exists
+          # 2️⃣ Check if the field exists
           existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json)
           if [ -n "$existing_uuid" ] && [ "$existing_uuid" != "null" ]; then
             echo "[OUTPUT] Field '$key' exists (uuid=$existing_uuid)"
@@ -103,7 +103,7 @@ jobs:
               exit 42
             fi
 
-            # Reload field list to get new uuid
+            # Re-fetch to ensure we have the new field UUID
             STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
               -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
@@ -113,17 +113,25 @@ jobs:
             existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json)
           fi
 
-          # 3️⃣ Ensure select option exists
+          # 3️⃣ Ensure the select option exists
           existing_option=$(jq -r --arg name "$key" --arg value "$label" \
             '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json)
 
           if [ -z "$existing_option" ] || [ "$existing_option" == "null" ]; then
-            echo "[STEP] Adding select option '$label' to '$key'..."
+            echo "[STEP] Adding select option '$label' to field '$key'..."
+
+            # Pull current version from field
+            field_version=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .version' fields.json)
+            if [ -z "$field_version" ] || [ "$field_version" == "null" ]; then
+              field_version=1
+            fi
+
             payload=$(jq -n \
               --arg uuid "$existing_uuid" \
               --arg name "$key" \
               --arg value "$label" \
               --arg label "$label" \
+              --argjson version "$field_version" \
               '{
                 domainName: "labels",
                 field: {
@@ -132,7 +140,7 @@ jobs:
                   type: "single-select",
                   source: "incident",
                   archived: false,
-                  version: 1,
+                  version: $version,
                   selectoptions: [{ value: $value, label: $label }]
                 }
               }')
@@ -155,7 +163,7 @@ jobs:
             echo "[OUTPUT] Select option '$label' already exists for '$key'"
           fi
 
-          # 4️⃣ Add label to the incident
+          # 4️⃣ Add the label to the incident
           echo "[STEP] Adding label '$label' to incident $irm_incident_id..."
           payload=$(jq -n \
             --arg incidentID "$irm_incident_id" \
