@@ -63,7 +63,7 @@ jobs:
           fi
 
           # 2️⃣ Check if the field exists
-          existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json)
+          existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           if [ -n "$existing_uuid" ] && [ "$existing_uuid" != "null" ]; then
             echo "[OUTPUT] Field '$key' exists (uuid=$existing_uuid)"
           else
@@ -110,18 +110,18 @@ jobs:
               -H "Content-Type: application/json" \
               "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
               -d '{}')
-            existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json)
+            existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           fi
 
           # 3️⃣ Ensure the select option exists
           existing_option=$(jq -r --arg name "$key" --arg value "$label" \
-            '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json)
+            '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json | head -n1 | xargs)
 
           if [ -z "$existing_option" ] || [ "$existing_option" == "null" ]; then
             echo "[STEP] Adding select option '$label' to field '$key'..."
 
-            # Pull current version from field
-            field_version=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .version' fields.json)
+            # Pull current version safely (only first numeric match)
+            field_version=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .version' fields.json | head -n1 | xargs)
             if [ -z "$field_version" ] || [ "$field_version" == "null" ]; then
               field_version=1
             fi
@@ -140,7 +140,7 @@ jobs:
                   type: "single-select",
                   source: "incident",
                   archived: false,
-                  version: ($version|tonumber),
+                  version: ($version | tonumber),
                   selectoptions: [{ value: $value, label: $label }]
                 }
               }')
