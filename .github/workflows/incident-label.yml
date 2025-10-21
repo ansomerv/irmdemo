@@ -46,6 +46,7 @@ jobs:
           curl -s -X POST \
             -H "Authorization: Bearer $IRM_API_KEY" \
             -H "Content-Type: application/json" \
+            -d '{}' \
             "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
             -o fields.json
 
@@ -59,7 +60,7 @@ jobs:
           irm_incident_id="${{ steps.extract.outputs.irm_incident_id }}"
 
           # Check if field exists
-          field_uuid=$(jq -r --arg key "$key" '.fields[] | select(.name==$key and .domainName=="labels") | .uuid' fields.json)
+          field_uuid=$(jq -r --arg key "$key" '(.fields // .)[] | select(.name==$key and .domainName=="labels") | .uuid' fields.json)
           if [ -z "$field_uuid" ] || [ "$field_uuid" == "null" ]; then
             echo "Creating new label field '$key' in IRM"
             curl -s -X POST \
@@ -68,13 +69,13 @@ jobs:
               -d "{\"field\":{\"name\":\"$key\",\"slug\":\"$key\",\"type\":\"single-select\",\"domainName\":\"labels\",\"source\":\"incident\",\"archived\":false,\"version\":1,\"selectoptions\":[]}}" \
               "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddField" > /dev/null
 
-            # Refresh field UUID after creation
             sleep 2
             field_uuid=$(curl -s -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
               -H "Content-Type: application/json" \
+              -d '{}' \
               "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" | \
-              jq -r --arg key "$key" '.fields[] | select(.name==$key) | .uuid')
+              jq -r --arg key "$key" '(.fields // .)[] | select(.name==$key) | .uuid')
           fi
 
           if [ -z "$field_uuid" ] || [ "$field_uuid" == "null" ]; then
@@ -83,7 +84,7 @@ jobs:
           fi
 
           # Check if value already exists
-          option_exists=$(jq -r --arg key "$key" --arg value "$value" '.fields[] | select(.name==$key) | .selectoptions[]? | select(.value==$value)' fields.json)
+          option_exists=$(jq -r --arg key "$key" --arg value "$value" '(.fields // .)[] | select(.name==$key) | .selectoptions[]? | select(.value==$value)' fields.json)
           if [ -z "$option_exists" ]; then
             echo "Adding new select option '$value' to field '$key'"
             uuid=$(uuidgen)
