@@ -23,23 +23,92 @@ jobs:
           echo "IRM Incident ID: $irm_incident_id"
           echo "irm_incident_id=$irm_incident_id" >> $GITHUB_OUTPUT
 
-      - name: Sync label to IRM
+      - name: Ensure label field exists & sync to IRM
         if: ${{ steps.extract.outputs.irm_incident_id != '' }}
         env:
           IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
-          IRM_API_URL: https://ep.amer.cloud.demokit.grafana.com/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel
+          STACK_URL: https://ep.amer.cloud.demokit.grafana.com
         run: |
-          label_name="${{ github.event.label.name }}"
+          label_raw="${{ github.event.label.name }}"
           label_color="${{ github.event.label.color }}"
           label_description="${{ github.event.label.description || '' }}"
           irm_incident_id="${{ steps.extract.outputs.irm_incident_id }}"
 
-          echo "Adding GitHub label '$label_name' (color: #$label_color) to IRM incident $irm_incident_id..."
+          # Determine key/value from label
+          if [[ "$label_raw" == *:* ]]; then
+            key="${label_raw%%:*}"
+            label="${label_raw#*:}"
+            key=$(echo "$key" | xargs)
+            label=$(echo "$label" | xargs)
+          else
+            key="githubLabel"
+            label="$label_raw"
+          fi
 
+          echo "Parsed label -> key='$key', label='$label'"
+
+          # 1️⃣ Check if the field (label key) exists
+          echo "[STEP] Checking if label field '$key' exists in IRM..."
+          STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
+            -d '{}')
+
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "[ERROR] Failed to fetch fields. Status: $STATUS_CODE"
+            cat fields.json
+            exit 42
+          fi
+
+          existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json)
+          if [ -n "$existing_uuid" ] && [ "$existing_uuid" != "null" ]; then
+            echo "[OUTPUT] Label field '$key' already exists (uuid=$existing_uuid)"
+          else
+            echo "[STEP] Creating new label field '$key'..."
+            slug=$(echo "$key" | tr '[:upper:] ' '[:lower:]_')
+
+            selectoptions=$(jq -n '[{ value: "auto", label: "auto" }]')
+
+            payload=$(jq -n \
+              --arg name "$key" \
+              --arg slug "$slug" \
+              --argjson selectoptions "$selectoptions" \
+              '{
+                field: {
+                  name: $name,
+                  slug: $slug,
+                  type: "single-select",
+                  domainName: "labels",
+                  source: "incident",
+                  archived: false,
+                  version: 1,
+                  selectoptions: $selectoptions
+                }
+              }')
+
+            STATUS_CODE=$(curl -s -o create_field.json -w "%{response_code}" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $IRM_API_KEY" \
+              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddField" \
+              -d "$payload")
+
+            if [ "$STATUS_CODE" = "200" ]; then
+              echo "[OUTPUT] Successfully created field '$key'"
+            else
+              echo "[ERROR] Failed to create field '$key'. Status: $STATUS_CODE"
+              cat create_field.json
+            fi
+          fi
+
+          # 2️⃣ Add label to the incident
+          echo "[STEP] Adding label '$label' to incident $irm_incident_id..."
           payload=$(jq -n \
             --arg incidentID "$irm_incident_id" \
-            --arg key "$label_name" \
-            --arg label "$label_name" \
+            --arg key "$key" \
+            --arg label "$label" \
             --arg colorHex "#$label_color" \
             --arg description "$label_description" \
             '{
@@ -52,16 +121,15 @@ jobs:
               }
             }')
 
-          echo "📦 Request payload:"
+          echo "📦 Payload:"
           echo "$payload" | jq .
 
-          echo "🚀 Sending to IRM..."
-          curl -v -L -X POST "$IRM_API_URL" \
+          STATUS_CODE=$(curl -s -L -o add_label.json -w "%{response_code}" \
+            -X POST \
             -H "Authorization: Bearer $IRM_API_KEY" \
             -H "Content-Type: application/json; charset=utf-8" \
-            -d "$payload" \
-            -w "\n\nHTTP Status: %{http_code}\n" \
-            -o response.json
+            "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel" \
+            -d "$payload")
 
-          echo "📬 Response:"
-          cat response.json | jq .
+          echo "📬 Response (HTTP $STATUS_CODE):"
+          cat add_label.json | jq .
