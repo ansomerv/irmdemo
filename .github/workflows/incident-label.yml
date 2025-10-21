@@ -131,7 +131,7 @@ jobs:
               --arg name "$key" \
               --arg value "$label" \
               --arg label "$label" \
-              --argjson version "$field_version" \
+              --arg version "$field_version" \
               '{
                 domainName: "labels",
                 field: {
@@ -140,7 +140,7 @@ jobs:
                   type: "single-select",
                   source: "incident",
                   archived: false,
-                  version: $version,
+                  version: ($version|tonumber),
                   selectoptions: [{ value: $value, label: $label }]
                 }
               }')
