@@ -69,8 +69,6 @@ jobs:
           else
             echo "[STEP] Creating label field '$key'..."
             slug=$(echo "$key" | tr '[:upper:] ' '[:lower:]_')
-
-            # Build initial selectoptions for this field
             selectoptions=$(jq -n --arg value "$label" --arg label "$label" '[{ value: $value, label: $label }]')
 
             payload=$(jq -n \
@@ -128,6 +126,8 @@ jobs:
               field_version=1
             fi
 
+            echo "[STEP] Current field version = $field_version"
+
             payload=$(jq -n \
               --arg uuid "$existing_uuid" \
               --arg name "$key" \
@@ -136,13 +136,13 @@ jobs:
               --arg version "$field_version" \
               '{
                 domainName: "labels",
+                version: ($version | tonumber),
                 field: {
                   uuid: $uuid,
                   name: $name,
                   type: "single-select",
                   source: "incident",
                   archived: false,
-                  version: ($version | tonumber),
                   selectoptions: [{ value: $value, label: $label }]
                 }
               }')
