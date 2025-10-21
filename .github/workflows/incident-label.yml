@@ -1,137 +1,69 @@
-name: Sync GitHub Labels to IRM
+name: Add Label to Grafana IRM
 
 on:
   issues:
     types: [labeled]
 
 jobs:
-  sync-label:
+  add_label_to_grafana:
     runs-on: ubuntu-latest
     env:
       IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
       STACK_URL: https://ep.amer.cloud.demokit.grafana.com
-      ORG_ID: 1
 
     steps:
-      - name: Extract IRM Incident ID from issue body
+      - name: Extract label and issue info
         id: extract
         run: |
-          body="${{ github.event.issue.body }}"
-          irm_incident_id=$(echo "$body" | tr -d '\r' | grep -Eio 'incident[ _]?id[^0-9]*[0-9]+' | grep -Eo '[0-9]+' | head -n1)
-          if [ -z "$irm_incident_id" ]; then
-            echo "No IRM Incident ID found in issue body, skipping."
-            exit 0
-          fi
-          echo "IRM Incident ID: $irm_incident_id"
-          echo "irm_incident_id=$irm_incident_id" >> $GITHUB_OUTPUT
+          echo "LABEL_NAME=${{ github.event.label.name }}" >> $GITHUB_ENV
+          echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+          echo "ISSUE_BODY=$(echo "${{ github.event.issue.body }}" | jq -Rsa .)" >> $GITHUB_ENV
 
-      - name: Parse GitHub label key/value
-        id: label
+      - name: Parse incident ID from issue body
+        id: parse_incident
         run: |
-          label="${{ github.event.label.name }}"
-          if [[ "$label" == *:* ]]; then
-            key="${label%%:*}"
-            value="${label#*:}"
-          else
-            key="ghLabel"
-            value="$label"
-          fi
-          echo "Parsed key=$key, value=$value"
-          echo "key=$key" >> $GITHUB_OUTPUT
-          echo "value=$value" >> $GITHUB_OUTPUT
-
-      - name: Fetch existing IRM fields
-        id: fields
-        run: |
-          curl -s -X POST \
-            -H "Authorization: Bearer $IRM_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{}' \
-            "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
-            -o fields.json
-          jq '.fields | length' fields.json
-
-      - name: Ensure label field exists in IRM
-        id: ensure_field
-        run: |
-          key="${{ steps.label.outputs.key }}"
-          field_uuid=$(jq -r --arg key "$key" '(.fields // .)[] | select(.name==$key and .domainName=="labels") | .uuid' fields.json)
-
-          if [ -z "$field_uuid" ] || [ "$field_uuid" == "null" ]; then
-            echo "Creating new label field '$key' in IRM"
-            curl -s -X POST \
-              -H "Authorization: Bearer $IRM_API_KEY" \
-              -H "Content-Type: application/json" \
-              -H "Accept: application/json" \
-              -H "x-grafana-org-id: $ORG_ID" \
-              -d "{\"field\":{\"name\":\"$key\",\"slug\":\"$key\",\"type\":\"single-select\",\"domainName\":\"labels\",\"source\":\"incident\",\"archived\":false,\"version\":1,\"selectoptions\":[]}}" \
-              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddField" > /dev/null
-
-            sleep 2
-            field_uuid=$(curl -s -X POST \
-              -H "Authorization: Bearer $IRM_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{}' \
-              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
-              | jq -r --arg key "$key" '(.fields // .)[] | select(.name==$key and .domainName=="labels") | .uuid')
-          fi
-
-          if [ -z "$field_uuid" ] || [ "$field_uuid" == "null" ]; then
-            echo "❌ Failed to find or create field UUID for key '$key'"
+          # Expecting the issue body to contain something like: incidentID: 546
+          INCIDENT_ID=$(echo $ISSUE_BODY | jq -r 'scan("incidentID[: ]+([0-9]+)") | .[0]')
+          if [ -z "$INCIDENT_ID" ]; then
+            echo "❌ Could not find incidentID in issue body"
             exit 1
           fi
-          echo "field_uuid=$field_uuid" >> $GITHUB_OUTPUT
+          echo "INCIDENT_ID=$INCIDENT_ID" >> $GITHUB_ENV
 
-      - name: Ensure select option exists for label value
-        id: ensure_option
+      - name: Generate UUID and add field select option
         run: |
-          key="${{ steps.label.outputs.key }}"
-          value="${{ steps.label.outputs.value }}"
-          field_uuid="${{ steps.ensure_field.outputs.field_uuid }}"
+          uuid=$(uuidgen)
+          echo "Adding select option '${{ env.LABEL_NAME }}' to field..."
+          curl -s -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddFieldSelectOption" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -H "x-grafana-org-id: 1" \
+            -d "{
+              \"fieldUUID\": \"b8d0d800-e1e0-450f-8ddd-05171ccdefee\",
+              \"fieldSelectOption\": {
+                \"uuid\": \"$uuid\",
+                \"value\": \"${{ env.LABEL_NAME }}\",
+                \"label\": \"${{ env.LABEL_NAME }}\",
+                \"source\": \"incident\",
+                \"icon\": \"tag-alt\"
+              }
+            }" \
+            | jq '.'
 
-          option_exists=$(jq -r --arg key "$key" --arg value "$value" \
-            '(.fields // .)[] | select(.name==$key) | .selectoptions[]? | select(.value==$value)' fields.json)
-
-          if [ -z "$option_exists" ]; then
-            echo "Creating select option '$value' for '$key'"
-            uuid=$(uuidgen)
-          curl -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddFieldSelectOption" \
-          -H "Authorization: Bearer $IRM_API_KEY" \
-          -H "Content-Type: application/json" \
-          -H "Accept: application/json" \
-          -H "x-grafana-org-id: $ORG_ID" \
-          -d "{
-            \"fieldUUID\": \"$field_uuid\",
-            \"fieldSelectOption\": {
-              \"uuid\": \"$uuid\",
-              \"value\": \"$value\",
-              \"label\": \"$value\",
-              \"source\": \"incident\",
-              \"icon\": \"tag-alt\"
-            }
-          }"
-          > /dev/null
-          else
-            echo "Select option '$value' already exists for '$key'."
-          fi
-
-      - name: Apply label to IRM incident
+      - name: Add label to Grafana incident
         run: |
-          irm_incident_id="${{ steps.extract.outputs.irm_incident_id }}"
-          key="${{ steps.label.outputs.key }}"
-          value="${{ steps.label.outputs.value }}"
-
-          echo "Applying label '$key=$value' to IRM incident $irm_incident_id"
-          curl "https://ep.amer.cloud.demokit.grafana.com/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel" \
-            --request POST \
-            --header 'Content-Type: application/json; charset=utf-8' \
-            --header "Authorization: Bearer $IRM_API_KEY" \
-            --data "{
-              \"incidentID\": \"$irm_incident_id\",
+          echo "Adding label '${{ env.LABEL_NAME }}' to incident ID '${{ env.INCIDENT_ID }}'..."
+          curl -s -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "{
+              \"incidentID\": \"${{ env.INCIDENT_ID }}\",
               \"label\": {
                 \"colorHex\": \"#ff0000\",
-                \"description\": \"Added from GitHub label sync\",
-                \"key\": \"$key\",
-                \"label\": \"$value\"
+                \"description\": \"Customers are affected by this incident.\",
+                \"key\": \"newx\",
+                \"label\": \"${{ env.LABEL_NAME }}\"
               }
-            }"
+            }" \
+            | jq '.'
