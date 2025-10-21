@@ -1,0 +1,61 @@
+name: Sync GitHub Labels to IRM Incident
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  sync-label:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract IRM Incident ID
+        id: extract
+        run: |
+          body="${{ github.event.issue.body }}"
+          # Find the incident ID in the issue body (e.g. "Incident ID: 538" or "IRM Incident: 538")
+          irm_incident_id=$(echo "$body" | grep -Eo '(IRM[ _]?Incident|Incident ID): *[0-9]+' | sed -E 's/.*: *//' | xargs)
+
+          if [ -z "$irm_incident_id" ]; then
+            echo "No IRM Incident ID found, skipping sync."
+            exit 0
+          fi
+
+          echo "IRM Incident ID: $irm_incident_id"
+          echo "irm_incident_id=$irm_incident_id" >> $GITHUB_OUTPUT
+
+      - name: Sync label to IRM
+        if: ${{ steps.extract.outputs.irm_incident_id != '' }}
+        env:
+          IRM_API_KEY: ${{ secrets.IRM_API_KEY }}
+          STACK_URL: https://demokitcloudamerep.grafana.net
+        run: |
+          label_name="${{ github.event.label.name }}"
+          label_color="${{ github.event.label.color }}"
+          label_description="${{ github.event.label.description || '' }}"
+          irm_incident_id="${{ steps.extract.outputs.irm_incident_id }}"
+
+          echo "Adding GitHub label '$label_name' (color: $label_color) to IRM incident $irm_incident_id..."
+
+          payload=$(jq -n \
+            --arg incidentID "$irm_incident_id" \
+            --arg key "$label_name" \
+            --arg label "$label_name" \
+            --arg colorHex "#$label_color" \
+            --arg description "$label_description" \
+            '{
+              incidentID: $incidentID,
+              label: {
+                key: $key,
+                label: $label,
+                colorHex: $colorHex,
+                description: $description
+              }
+            }')
+
+          curl -s -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.AddLabel" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$payload"
+
+          echo "✅ Label synced to IRM."
