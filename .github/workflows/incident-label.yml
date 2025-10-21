@@ -29,6 +29,8 @@ jobs:
           IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
           STACK_URL: https://ep.amer.cloud.demokit.grafana.com
         run: |
+          set -euo pipefail
+
           label_raw="${{ github.event.label.name }}"
           label_color="${{ github.event.label.color }}"
           label_description="${{ github.event.label.description || '' }}"
@@ -47,7 +49,7 @@ jobs:
 
           echo "[STEP] Parsed label -> key='$key', label='$label'"
 
-          # 1️⃣ Fetch existing IRM fields
+          # 1️⃣ Fetch IRM fields
           echo "[STEP] Fetching IRM fields..."
           STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
             -X POST \
@@ -62,7 +64,7 @@ jobs:
             exit 42
           fi
 
-          # 2️⃣ Check if the field already exists
+          # 2️⃣ Check if the field exists
           existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           if [ -n "$existing_uuid" ] && [ "$existing_uuid" != "null" ]; then
             echo "[OUTPUT] Label field '$key' already exists (uuid=$existing_uuid)"
@@ -103,7 +105,7 @@ jobs:
               exit 42
             fi
 
-            # Refresh fields.json to capture the new field
+            # Re-fetch fields list
             curl -s -X POST \
               -H "Authorization: Bearer $IRM_API_KEY" \
               -H "Content-Type: application/json" \
@@ -113,14 +115,13 @@ jobs:
             existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           fi
 
-          # 3️⃣ Check if the select option exists
+          # 3️⃣ Check for existing select option
           existing_option=$(jq -r --arg name "$key" --arg value "$label" \
             '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json | head -n1 | xargs)
 
           if [ -z "$existing_option" ] || [ "$existing_option" == "null" ]; then
             echo "[STEP] Adding select option '$label' to field '$key'..."
 
-            # Pull version number from the field object
             field_version=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .version' fields.json | head -n1 | xargs)
             if [ -z "$field_version" ] || [ "$field_version" == "null" ]; then
               field_version=1
@@ -128,12 +129,15 @@ jobs:
 
             echo "[STEP] Current field version = $field_version"
 
+            # Fetch existing options to preserve UUIDs
+            existing_options=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .selectoptions // []' fields.json)
+            updated_options=$(echo "$existing_options" | jq --arg value "$label" --arg label "$label" '. + [{ value: $value, label: $label }]')
+
             payload=$(jq -n \
               --arg uuid "$existing_uuid" \
               --arg name "$key" \
-              --arg value "$label" \
-              --arg label "$label" \
               --arg version "$field_version" \
+              --argjson selectoptions "$updated_options" \
               '{
                 domainName: "labels",
                 version: ($version | tonumber),
@@ -143,7 +147,7 @@ jobs:
                   type: "single-select",
                   source: "incident",
                   archived: false,
-                  selectoptions: [{ value: $value, label: $label }]
+                  selectoptions: $selectoptions
                 }
               }')
 
@@ -165,7 +169,7 @@ jobs:
             echo "[OUTPUT] Select option '$label' already exists for '$key'"
           fi
 
-          # 4️⃣ Add label to the incident
+          # 4️⃣ Add label to incident
           echo "[STEP] Adding label '$label' to incident $irm_incident_id..."
           payload=$(jq -n \
             --arg incidentID "$irm_incident_id" \
