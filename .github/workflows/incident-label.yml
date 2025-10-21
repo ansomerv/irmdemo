@@ -60,7 +60,7 @@ jobs:
             exit 42
           fi
 
-          # 2️⃣ Locate field UUID for githubLabel
+          # 2️⃣ Locate githubLabel field UUID
           field_uuid=$(jq -r --arg name "githubLabel" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1)
           if [ -z "$field_uuid" ] || [ "$field_uuid" = "null" ]; then
             echo "[STEP] 'githubLabel' field not found. Creating it..."
@@ -103,7 +103,7 @@ jobs:
             echo "[OUTPUT] Using existing field UUID: $field_uuid"
           fi
 
-          # 3️⃣ Check if select option already exists
+          # 3️⃣ Check if option already exists
           value_exists=$(jq -r --arg key "githubLabel" --arg val "$value" \
             '.fields[] | select(.name==$key) | .selectoptions[]? | select(.value==$val) | .value' fields.json | head -n1)
 
@@ -141,8 +141,30 @@ jobs:
               exit 42
             fi
             echo "[OUTPUT] Successfully added select option '$value' to githubLabel"
+
+            # 🕐 Wait until new option appears
+            echo "[STEP] Verifying that option '$value' is registered in IRM..."
+            for i in {1..6}; do
+              sleep 2
+              curl -s -X POST \
+                -H "Authorization: Bearer $IRM_API_KEY" \
+                -H "Content-Type: application/json" \
+                "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
+                -d '{}' > verify.json
+              value_exists=$(jq -r --arg key "githubLabel" --arg val "$value" \
+                '.fields[] | select(.name==$key) | .selectoptions[]? | select(.value==$val) | .value' verify.json | head -n1)
+              if [ -n "$value_exists" ] && [ "$value_exists" != "null" ]; then
+                echo "[OUTPUT] Option '$value' now visible in IRM."
+                break
+              fi
+              echo "[WAIT] Option not visible yet, retrying ($i/6)..."
+              if [ "$i" -eq 6 ]; then
+                echo "[ERROR] Option '$value' never became available in IRM. Skipping label add."
+                exit 42
+              fi
+            done
           else
-            echo "[OUTPUT] Select option '$value' already exists for githubLabel, skipping."
+            echo "[OUTPUT] Select option '$value' already exists for githubLabel, skipping add."
           fi
 
           # 4️⃣ Add label to IRM Incident
