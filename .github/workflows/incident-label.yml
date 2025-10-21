@@ -23,7 +23,7 @@ jobs:
           echo "IRM Incident ID: $irm_incident_id"
           echo "irm_incident_id=$irm_incident_id" >> $GITHUB_OUTPUT
 
-      - name: Sync GitHub Label → Grafana IRM
+      - name: Sync GitHub Label → Grafana IRM (AddField-only)
         if: ${{ steps.extract.outputs.irm_incident_id != '' }}
         env:
           IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
@@ -39,18 +39,17 @@ jobs:
           # Parse key:value or default to githubLabel
           if [[ "$label_raw" == *:* ]]; then
             key="${label_raw%%:*}"
-            label="${label_raw#*:}"
+            value="${label_raw#*:}"
             key=$(echo "$key" | xargs)
-            label=$(echo "$label" | xargs)
+            value=$(echo "$value" | xargs)
           else
             key="githubLabel"
-            label="$label_raw"
+            value="$label_raw"
           fi
 
-          echo "[STEP] Parsed label -> key='$key', label='$label'"
+          echo "[STEP] Parsed label -> key='$key', value='$value'"
 
           # 1️⃣ Fetch IRM fields
-          echo "[STEP] Fetching IRM fields..."
           STATUS_CODE=$(curl -s -o fields.json -w "%{response_code}" \
             -X POST \
             -H "Authorization: Bearer $IRM_API_KEY" \
@@ -64,14 +63,17 @@ jobs:
             exit 42
           fi
 
-          # 2️⃣ Check if the field exists
-          existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
-          if [ -n "$existing_uuid" ] && [ "$existing_uuid" != "null" ]; then
-            echo "[OUTPUT] Label field '$key' already exists (uuid=$existing_uuid)"
+          # 2️⃣ Check if both key and value exist
+          field_exists=$(jq -r --arg key "$key" '.fields[] | select(.name==$key) | .name' fields.json | head -n1 | xargs)
+          value_exists=$(jq -r --arg key "$key" --arg val "$value" '.fields[] | select(.name==$key) | .selectoptions[]? | select(.value==$val) | .value' fields.json | head -n1 | xargs)
+
+          if [ -n "$field_exists" ] && [ -n "$value_exists" ]; then
+            echo "[OUTPUT] Field '$key' with value '$value' already exists. Skipping AddField."
           else
-            echo "[STEP] Creating label field '$key'..."
+            echo "[STEP] Adding new field '$key' with value '$value'..."
             slug=$(echo "$key" | tr '[:upper:] ' '[:lower:]_')
-            selectoptions=$(jq -n --arg value "$label" --arg label "$label" '[{ value: $value, label: $label }]')
+            selectoptions=$(jq -n '[{ value: $ARGS.named.val, label: $ARGS.named.val }]' --arg val "$value")
+
             payload=$(jq -n \
               --arg name "$key" \
               --arg slug "$slug" \
@@ -97,114 +99,20 @@ jobs:
               -d "$payload")
 
             if [ "$STATUS_CODE" = "200" ]; then
-              echo "[OUTPUT] Successfully created field '$key'"
+              echo "[OUTPUT] Successfully created new field '$key' with value '$value'"
             else
               echo "[ERROR] Failed to create field '$key'. HTTP $STATUS_CODE"
               cat add_field.json
               exit 42
             fi
-
-            # Refresh fields list
-            curl -s -X POST \
-              -H "Authorization: Bearer $IRM_API_KEY" \
-              -H "Content-Type: application/json" \
-              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.GetFields" \
-              -d '{}' > fields.json
-
-            existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | head -n1 | xargs)
           fi
 
-          # 3️⃣ Check if select option already exists
-          existing_option=$(jq -r --arg name "$key" --arg value "$label" \
-            '.fields[] | select(.name==$name) | .selectoptions[]? | select(.value==$value) | .value' fields.json | head -n1 | xargs)
-          if [ -z "$existing_option" ] || [ "$existing_option" == "null" ]; then
-            echo "[STEP] Adding select option '$label' to field '$key'..."
-
-            field_version=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .version' fields.json | head -n1 | xargs)
-            if [ -z "$field_version" ] || [ "$field_version" == "null" ]; then
-              field_version=1
-            fi
-            echo "[STEP] Current field version = $field_version"
-
-            # --- Hardened block: merge and normalize all selectoptions arrays ---
-            echo "[DEBUG] Raw selectoptions output from IRM:"
-            jq -r --arg name "$key" '.fields[] | select(.name==$name) | .selectoptions // []' fields.json || echo "(jq failed)"
-
-            # Merge multiple arrays safely, dropping invalid UUID entries
-            existing_options=$(jq -s --arg key "$key" '
-              [ .[] 
-                | .fields[]? 
-                | select(.name==$key) 
-                | .selectoptions? 
-                | map(select(.uuid != null and .uuid != "")) 
-              ] 
-              | add // []' fields.json)
-
-            if [ -z "$existing_options" ] || [ "$existing_options" = "null" ]; then
-              echo "[WARN] existing_options empty or null, resetting to []"
-              existing_options="[]"
-            elif ! echo "$existing_options" | jq empty >/dev/null 2>&1; then
-              echo "[WARN] existing_options invalid JSON, resetting to []"
-              existing_options="[]"
-            fi
-
-            echo "[DEBUG] Normalized selectoptions JSON:"
-            echo "$existing_options" | jq .
-            # ------------------------------------------------------------------
-
-            updated_options=$(echo "$existing_options" | jq --arg value "$label" --arg label "$label" '. + [{ value: $value, label: $label }]')
-
-            # 🔒 Ensure valid UUID before continuing
-            existing_uuid=$(jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json | grep -E '.{8}-.{4}-.{4}-.{4}-.{12}' | head -n1 | xargs)
-            if [ -z "$existing_uuid" ]; then
-              echo "[ERROR] Could not find a valid UUID for field '$key'."
-              jq -r --arg name "$key" '.fields[] | select(.name==$name) | .uuid' fields.json
-              exit 42
-            fi
-            echo "[STEP] Using field UUID: $existing_uuid"
-
-            payload=$(jq -n \
-              --arg uuid "$existing_uuid" \
-              --arg name "$key" \
-              --arg version "$field_version" \
-              --argjson selectoptions "$updated_options" \
-              '{
-                domainName: "labels",
-                version: ($version | tonumber),
-                field: {
-                  uuid: $uuid,
-                  name: $name,
-                  type: "single-select",
-                  source: "incident",
-                  archived: false,
-                  selectoptions: $selectoptions
-                }
-              }')
-
-            STATUS_CODE=$(curl -s -o update_field.json -w "%{response_code}" \
-              -X POST \
-              -H "Authorization: Bearer $IRM_API_KEY" \
-              -H "Content-Type: application/json" \
-              "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.UpdateField" \
-              -d "$payload")
-
-            if [ "$STATUS_CODE" = "200" ]; then
-              echo "[OUTPUT] Added select option '$label' to field '$key'"
-            else
-              echo "[ERROR] Failed to add select option '$label'. HTTP $STATUS_CODE"
-              cat update_field.json
-              exit 42
-            fi
-          else
-            echo "[OUTPUT] Select option '$label' already exists for '$key'"
-          fi
-
-          # 4️⃣ Add label to incident
-          echo "[STEP] Adding label '$label' to incident $irm_incident_id..."
+          # 3️⃣ Add label to the IRM incident
+          echo "[STEP] Adding label '$key:$value' to incident $irm_incident_id..."
           payload=$(jq -n \
             --arg incidentID "$irm_incident_id" \
             --arg key "$key" \
-            --arg label "$label" \
+            --arg label "$value" \
             --arg colorHex "#$label_color" \
             --arg description "$label_description" \
             '{
