@@ -127,6 +127,8 @@ jobs:
               field_version=1
             fi
             echo "[STEP] Current field version = $field_version"
+            echo "[DEBUG] Raw selectoptions output from IRM:"
+            jq -r --arg name "$key" '.fields[] | select(.name==$name) | .selectoptions' fields.json || echo "(jq failed)"
 
             # --- Hardened block: ensure valid JSON for selectoptions ---
             existing_options=$(jq -r --arg name "$key" \
