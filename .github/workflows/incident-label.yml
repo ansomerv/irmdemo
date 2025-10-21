@@ -32,7 +32,7 @@ jobs:
             key="${label%%:*}"
             value="${label#*:}"
           else
-            key="githubLabel"
+            key="ghLabel"
             value="$label"
           fi
           echo "Key: $key"
