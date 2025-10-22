@@ -1,0 +1,60 @@
+name: Post IRM Activity from Issue Comment
+
+on:
+  issue_comment:
+    types: [created]
+
+env:
+  STACK_URL: https://ep.amer.cloud.demokit.grafana.com
+  IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
+
+jobs:
+  post-irm-activity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract issue data
+        id: extract
+        run: |
+          ISSUE_BODY="${{ github.event.issue.body }}"
+          COMMENT_BODY="${{ github.event.comment.body }}"
+          COMMENT_TIME="${{ github.event.comment.created_at }}"
+
+          echo "ISSUE_BODY<<EOF" >> $GITHUB_ENV
+          echo "$ISSUE_BODY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          echo "COMMENT_BODY<<EOF" >> $GITHUB_ENV
+          echo "$COMMENT_BODY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          echo "COMMENT_TIME=$COMMENT_TIME" >> $GITHUB_ENV
+
+      - name: Parse incident ID from issue body
+        id: parse_incident
+        run: |
+          INCIDENT_ID=$(echo "$ISSUE_BODY" | grep -Eo '([Ii]ncident[ _-]?[Ii][dD])[: ]*\**[[:space:]]*([0-9]+)' | grep -Eo '[0-9]+' | head -1)
+          
+          if [ -z "$INCIDENT_ID" ]; then
+            echo "❌ Could not find incidentID in issue body"
+            echo "Issue body was:"
+            echo "$ISSUE_BODY"
+            exit 1
+          fi
+
+          echo "✅ Found incidentID: $INCIDENT_ID"
+          echo "INCIDENT_ID=$INCIDENT_ID" >> $GITHUB_ENV
+
+      - name: Post comment to Grafana IRM
+        run: |
+          echo "Posting comment as activity for incident $INCIDENT_ID"
+          
+          curl -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/ActivityService.AddActivity" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "{
+              \"activityKind\": \"userNote\",
+              \"body\": $(jq -Rs . <<< \"$COMMENT_BODY\"),
+              \"eventTime\": \"$COMMENT_TIME\",
+              \"incidentID\": \"$INCIDENT_ID\"
+            }"
