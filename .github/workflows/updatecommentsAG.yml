@@ -17,9 +17,9 @@ jobs:
         run: |
           comment_body="${{ github.event.comment.body }}"
 
-          # 🧠 Skip if comment starts with "Comment from Grafana IRM" (case-insensitive)
-          if echo "$comment_body" | grep -iq '^comment from grafana irm'; then
-            echo "⚠️ Skipping: comment originated from Grafana IRM."
+          # 🧠 Skip if comment starts with "Comment from Grafana IRM" or "Comment from Grafana:" (case-insensitive)
+          if echo "$comment_body" | grep -iqE '^(comment from grafana irm|comment from grafana:)'; then
+            echo "⚠️ Skipping: comment originated from Grafana."
             exit 0
           fi
 
