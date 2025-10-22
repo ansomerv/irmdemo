@@ -34,13 +34,16 @@ jobs:
           # Escape safely for JSON (preserving line breaks)
           comment_escaped=$(jq -Rs . <<< "$comment_body" | sed 's/^"//;s/"$//')
 
+          # Prefix the note with "Note from GitHub:"
+          prefixed_note="Note from GitHub: $comment_escaped"
+
           curl -X POST "$API_URL/api/v1/resolution_notes/" \
             --header "Authorization: $IRM_API_KEY" \
             --header "Content-Type: application/json" \
             --header "X-Grafana-URL: $GRAFANA_STACK_URL" \
             --data "{
               \"alert_group_id\": \"$irm_id\",
-              \"text\": \"$comment_escaped\"
+              \"text\": \"$prefixed_note\"
             }" \
             -w "\n\nHTTP Status: %{http_code}\n" \
             -o response.txt
