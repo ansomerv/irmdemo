@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Extract issue data
+      - name: Extract issue and comment data
         id: extract
         run: |
           ISSUE_BODY="${{ github.event.issue.body }}"
@@ -48,13 +48,16 @@ jobs:
       - name: Post comment to Grafana IRM
         run: |
           echo "Posting comment as activity for incident $INCIDENT_ID"
-          
+
+          # Use jq to escape safely, then strip wrapping quotes
+          BODY_ESCAPED=$(jq -Rs . <<< "$COMMENT_BODY" | sed 's/^"//;s/"$//' )
+
           curl -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/v1/ActivityService.AddActivity" \
             -H "Authorization: Bearer $IRM_API_KEY" \
             -H "Content-Type: application/json; charset=utf-8" \
             -d "{
               \"activityKind\": \"userNote\",
-              \"body\": $(jq -Rs . <<< \"$COMMENT_BODY\"),
+              \"body\": \"$BODY_ESCAPED\",
               \"eventTime\": \"$COMMENT_TIME\",
               \"incidentID\": \"$INCIDENT_ID\"
             }"
