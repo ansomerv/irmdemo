@@ -15,6 +15,14 @@ jobs:
           API_URL: https://oncall-prod-us-east-0.grafana.net/oncall
           GRAFANA_STACK_URL: https://demokitcloudamerep.grafana.net
         run: |
+          comment_body="${{ github.event.comment.body }}"
+
+          # 🧠 Skip if comment starts with "Comment from Grafana IRM" (case-insensitive)
+          if echo "$comment_body" | grep -iq '^comment from grafana irm'; then
+            echo "⚠️ Skipping: comment originated from Grafana IRM."
+            exit 0
+          fi
+
           echo "Parsing Alert Group ID from issue body..."
           body="${{ github.event.issue.body }}"
           irm_id=$(echo "$body" | grep -Eo '(\*\*)?(Alert[ _]Group)(\*\*)?: *[A-Za-z0-9]+' | sed -E 's/.*: *//' | xargs)
@@ -24,17 +32,13 @@ jobs:
             exit 0
           fi
 
-          comment_body="${{ github.event.comment.body }}"
           comment_user="${{ github.event.comment.user.login }}"
           comment_time="${{ github.event.comment.created_at }}"
-
           echo "✅ Found Alert Group ID: $irm_id"
           echo "Posting comment by @$comment_user at $comment_time"
 
           # Escape safely for JSON (preserving line breaks)
           comment_escaped=$(jq -Rs . <<< "$comment_body" | sed 's/^"//;s/"$//')
-
-          # Prefix the note with "Note from GitHub:"
           prefixed_note="Note from GitHub: $comment_escaped"
 
           curl -X POST "$API_URL/api/v1/resolution_notes/" \
