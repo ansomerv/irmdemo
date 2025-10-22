@@ -1,0 +1,63 @@
+name: Add GitHub Label to IRM Incident
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  add-ghlabel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add GitHub Label to IRM Incident
+        env:
+          STACK_URL: https://ep.amer.cloud.demokit.grafana.com
+          IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
+        run: |
+          echo "🚀 Processing GitHub label event"
+
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          LABEL_NAME="${{ github.event.label.name }}"
+          ISSUE_BODY=$(echo '${{ github.event.issue.body }}')
+
+          # Extract the IRM incident ID from the issue body
+          INCIDENT_ID=$(echo "$ISSUE_BODY" | grep -oE '"incident_id": ?"[^"]+"' | awk -F'"' '{print $4}')
+
+          if [ -z "$INCIDENT_ID" ]; then
+            echo "❌ No incident_id found in issue body. Exiting."
+            exit 0
+          fi
+
+          echo "✅ Found IRM incident: $INCIDENT_ID"
+          echo "✅ Label added: $LABEL_NAME"
+
+          key="ghLabel"
+          value="$LABEL_NAME"
+
+          echo "Using key=$key, value=$value"
+
+          # 1️⃣ Add label value to IRM
+          payload_value=$(jq -n --arg key "$key" --arg value "$value" \
+            '{key: $key, value: $value}')
+
+          curl -s -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/FieldsService.AddLabelValue" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -H "x-grafana-org-id: 1" \
+            -d "$payload_value" \
+            -o /dev/null
+
+          # 2️⃣ Add label to the specific incident
+          payload_label=$(jq -n --arg incidentID "$INCIDENT_ID" --arg key "$key" --arg label "$value" \
+            '{incidentID: $incidentID, label: { key: $key, label: $label }}')
+
+          curl -s -X POST "$STACK_URL/api/plugins/grafana-irm-app/resources/api/IncidentsService.AddLabel" \
+            -H "Authorization: Bearer $IRM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -H "x-grafana-org-id: 1" \
+            -d "$payload_label" \
+            -o /dev/null
+
+          echo "✅ Successfully added ghLabel:'$value' to IRM incident $INCIDENT_ID"
