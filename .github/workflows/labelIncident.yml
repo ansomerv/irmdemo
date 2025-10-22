@@ -9,32 +9,44 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Extract issue details
+        id: extract
+        run: |
+          echo "📋 Extracting issue info..."
+          echo "ISSUE_BODY<<EOF" >> $GITHUB_ENV
+          echo "${{ github.event.issue.body }}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+          echo "LABEL_NAME=${{ github.event.label.name }}" >> $GITHUB_ENV
+
+      - name: Parse incident ID from issue body
+        id: parse_incident
+        run: |
+          echo "🔍 Searching for incident ID..."
+          INCIDENT_ID=$(echo "$ISSUE_BODY" | grep -Eo '([Ii]ncident[ _-]?[Ii][dD])[: ]*\**[[:space:]]*([0-9]+)' | grep -Eo '[0-9]+' | head -1)
+          
+          if [ -z "$INCIDENT_ID" ]; then
+            echo "❌ Could not find incidentID in issue body"
+            echo "Issue body was:"
+            echo "$ISSUE_BODY"
+            exit 1
+          fi
+
+          echo "✅ Found incidentID: $INCIDENT_ID"
+          echo "INCIDENT_ID=$INCIDENT_ID" >> $GITHUB_ENV
+
       - name: Add GitHub Label to IRM Incident
         env:
           STACK_URL: https://ep.amer.cloud.demokit.grafana.com
           IRM_API_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY_INCIDENT }}
         run: |
-          echo "🚀 Processing GitHub label event"
-
-          ISSUE_NUMBER=${{ github.event.issue.number }}
-          LABEL_NAME="${{ github.event.label.name }}"
-          ISSUE_BODY=$(echo '${{ github.event.issue.body }}')
-
-          # Extract the IRM incident ID from the issue body
-          INCIDENT_ID=$(echo "$ISSUE_BODY" | grep -oE '"incident_id": ?"[^"]+"' | awk -F'"' '{print $4}')
-
-          if [ -z "$INCIDENT_ID" ]; then
-            echo "❌ No incident_id found in issue body. Exiting."
-            exit 0
-          fi
-
-          echo "✅ Found IRM incident: $INCIDENT_ID"
-          echo "✅ Label added: $LABEL_NAME"
+          echo "🚀 Adding label to IRM incident"
 
           key="ghLabel"
           value="$LABEL_NAME"
 
           echo "Using key=$key, value=$value"
+          echo "Target incident: $INCIDENT_ID"
 
           # 1️⃣ Add label value to IRM
           payload_value=$(jq -n --arg key "$key" --arg value "$value" \
@@ -48,7 +60,7 @@ jobs:
             -d "$payload_value" \
             -o /dev/null
 
-          # 2️⃣ Add label to the specific incident
+          # 2️⃣ Add label to incident
           payload_label=$(jq -n --arg incidentID "$INCIDENT_ID" --arg key "$key" --arg label "$value" \
             '{incidentID: $incidentID, label: { key: $key, label: $label }}')
 
