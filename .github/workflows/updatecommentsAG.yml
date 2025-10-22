@@ -1,0 +1,49 @@
+name: Add IRM Alert Group Note from Comment
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  add-note:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add comment as Alert Group note
+        env:
+          IRM_API_KEY: ${{ secrets.IRM_API_KEY }}
+          API_URL: https://oncall-prod-us-east-0.grafana.net/oncall
+          GRAFANA_STACK_URL: https://demokitcloudamerep.grafana.net
+        run: |
+          echo "Parsing Alert Group ID from issue body..."
+          body="${{ github.event.issue.body }}"
+          irm_id=$(echo "$body" | grep -Eo '(\*\*)?(Alert[ _]Group)(\*\*)?: *[A-Za-z0-9]+' | sed -E 's/.*: *//' | xargs)
+
+          if [ -z "$irm_id" ]; then
+            echo "❌ No Alert Group ID found, skipping."
+            exit 0
+          fi
+
+          comment_body="${{ github.event.comment.body }}"
+          comment_user="${{ github.event.comment.user.login }}"
+          comment_time="${{ github.event.comment.created_at }}"
+
+          echo "✅ Found Alert Group ID: $irm_id"
+          echo "Posting comment by @$comment_user at $comment_time"
+
+          # Escape safely for JSON (preserving line breaks)
+          comment_escaped=$(jq -Rs . <<< "$comment_body" | sed 's/^"//;s/"$//')
+
+          curl -X POST "$API_URL/api/v1/resolution_notes/" \
+            --header "Authorization: $IRM_API_KEY" \
+            --header "Content-Type: application/json" \
+            --header "X-Grafana-URL: $GRAFANA_STACK_URL" \
+            --data "{
+              \"alert_group_id\": \"$irm_id\",
+              \"text\": \"$comment_escaped\"
+            }" \
+            -w "\n\nHTTP Status: %{http_code}\n" \
+            -o response.txt
+
+          echo "Response body:"
+          cat response.txt
